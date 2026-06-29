@@ -1,0 +1,323 @@
+HTML_Torres = 
+
+-- ═══════════════════════════════════════════════
+-- SEÇÃO 1: CONFIGURAÇÕES E CONTEXTO BASE
+-- ═══════════════════════════════════════════════
+VAR Cfg_ColunasPorLinha    = 10
+VAR Cfg_TorresPorPagina    = 40
+VAR Ctx_ProjetoSelecionado = SELECTEDVALUE('mapa_torres'[projeto])
+
+RETURN 
+    IF(
+        ISBLANK(Ctx_ProjetoSelecionado),
+        "<html><body><div style='font-size:16px;font-weight:bold;text-align:center;padding:40px;color:#333;'>Nenhum projeto foi selecionado. ⚠️</div></body></html>",
+        
+        -- ═══════════════════════════════════════════════
+        -- SEÇÃO 2: FILTRAGEM, INDEXAÇÃO (SEM EMPATES) E PAGINAÇÃO
+        -- ═══════════════════════════════════════════════
+        VAR Dados_Projeto = 
+            FILTER(ALLSELECTED('mapa_torres'), 'mapa_torres'[projeto] = Ctx_ProjetoSelecionado)
+
+        VAR Total_Torres_Projeto = COUNTROWS(Dados_Projeto)
+        VAR Total_Paginas        = MAX(CEILING(Total_Torres_Projeto / Cfg_TorresPorPagina, 1), 1)
+        VAR Ctx_PaginaAtual      = MIN(SELECTEDVALUE('Pagina'[pagina], 1), Total_Paginas)
+
+        VAR Pag_IndiceInicio = (Ctx_PaginaAtual - 1) * Cfg_TorresPorPagina + 1
+        VAR Pag_IndiceFim    = Ctx_PaginaAtual      * Cfg_TorresPorPagina
+        
+        VAR Dados_Ordenados = 
+            ADDCOLUMNS(
+                Dados_Projeto,
+                "@indice", 
+                RANKX(
+                    Dados_Projeto, 
+                    FORMAT('mapa_torres'[ordenacao], "000000") & "_" & 'mapa_torres'[torre] & "_" & 'mapa_torres'[modelo] & "_" & 'mapa_torres'[id_torre],
+                    , 
+                    ASC, 
+                    Dense
+                )
+            )
+
+        VAR Dados_Pagina = FILTER(Dados_Ordenados, [@indice] >= Pag_IndiceInicio && [@indice] <= Pag_IndiceFim)
+        VAR Total_Linhas = COALESCE(CEILING(COUNTROWS(Dados_Pagina) / Cfg_ColunasPorLinha, 1), 0)
+
+        -- ═══════════════════════════════════════════════
+        -- SEÇÃO 3: ESTILOS CSS 
+        -- ═══════════════════════════════════════════════
+        VAR CSS_Estilos = "<style>
+          body { font-family:'Segoe UI',sans-serif; margin:0; padding:0; font-weight:300; background:#FFF; }
+          .projeto-bloco { width:100%; display:block; box-sizing:border-box; padding: 0}
+          table { width:100%; table-layout:fixed; border-collapse:collapse; margin-bottom:4px; }
+          
+          /* CORRIGIDO: Diminuído o padding vertical de 15px para 2px para aproximar as linhas */
+          td { text-align:center; padding:2px 1px; position:relative; overflow:visible; vertical-align:middle; }
+          
+          /* Container flex relativo para permitir o absoluto interno funcionar */
+          .celula-flex { display: inline-flex; align-items: center; justify-content: center; width: 88px; position: relative; box-sizing: border-box; }
+          
+          .torre-container { display:inline-flex; flex-direction:column; align-items:center; justify-content:flex-start; position:relative; width:88px; min-height:80px; box-sizing:border-box; flex-shrink: 0; }
+          
+          /* Badges de Status Centralizados */
+          .status-badges { display:flex; justify-content:center; gap:2px; margin-bottom:2px; height:14px; width: 100%; }
+          .badge { width:19px; height:15px; font-size:9.5px; font-weight:bold; color:#fff; display:inline-flex; align-items:center; justify-content:center; text-align:center; border-radius:2.5px; line-height:1; box-sizing:border-box; }
+          
+          .badge-liberado { background:#28a745; }
+          .badge-bloqueado { background:#dc3545; }
+          .quadro-torre { width:85px; height:85px; margin:1px auto; padding:0; border:none; border-radius:6px; background:transparent; display:flex; align-items:center; justify-content:center; box-sizing:border-box; overflow:hidden; transition: all 0.2s ease; }
+          .quadro-torre:hover { background:rgba(0,0,0,0.05); cursor:pointer; }
+          .quadro-torre.vazio { background: #fafafa; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.05), 0 2px 5px rgba(0,0,0,0.04); border-radius: 8px; }
+          .quadro-torre.vazio:hover { background: rgba(0,0,0,0.03); box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.06); }
+          .icone-torre  { width:100%; height:100%; object-fit:cover; display:block; transform:scale(1.2); clip-path:inset(0% round 6px); }
+          .label-torre { font-size:9px; color:#FFF; background:#0054A6; padding:2px 4px; border-radius:3px; display:inline-block; text-align:center; margin-top:2px; max-width:95%; box-sizing:border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          
+          /* CORRIGIDO: Ajustado o 'top' para 48px mantendo o alinhamento central com a redução do padding */
+          .vano-travessia { position: absolute; left: 86px; top: 48px; display: flex; flex-direction: column; align-items: center; justify-content: center; width: calc(10vw - 84px); min-width: 38px; z-index: 10; pointer-events: none; }
+          .linha-conector { width: 100%; height: 2px; background: #0054A6; position: relative; }
+          .linha-conector::after { content: '►'; position: absolute; right: -2px; top: -4.5px; font-size: 8px; color: #0054A6; }
+          
+          /* Container transparente para a imagem sem fundo */
+          .tag-travessia { display: flex; align-items: center; justify-content: center; width: 35px; height: 35px; margin-bottom: 2px; background: transparent; box-sizing: border-box; pointer-events: auto; }
+          .tag-travessia img { width: 100%; height: 100%; object-fit: contain; background: transparent; }
+
+          .torre-container:hover .tooltip { display:block; }
+          .tooltip { position:absolute; width:250px; background:white; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,0.15); padding:12px; display:none; z-index:99999; text-align:left; box-sizing:border-box; }
+          
+          tr td .torre-container .tooltip { top:50%; left:108%; transform:translateY(-50%); }
+          tr:nth-child(-n+2) td .torre-container .tooltip { top:0; transform:none; }
+          tr:nth-child(n+3)  td .torre-container .tooltip { top:auto; bottom:0; transform:none; }
+          tr td:nth-child(n+9) .torre-container .tooltip { left:auto; right:108%; }
+          
+          .tt-title   { font-weight:bold; font-size:12px; color:#0054A6; margin-bottom:4px; text-align:center; width:100%; }          
+          .tt-section { font-weight:bold; font-size:10px; color:#0054A6; margin:6px 0 4px; border-bottom:1px solid #eee; padding-bottom:1px; }
+          .tt-row     { font-size:10.5px; display:flex; justify-content:space-between; border-bottom:1px solid #f5f5f5; padding:2px 0; }
+          .status-bloco { background:#FFF; border:1px solid #E5E9F0; border-radius:6px; padding:6px 8px; margin-bottom:6px; box-shadow:0 1px 4px rgba(0,0,0,0.03); }
+          .etapas-bloco { background:#1565C0; border-radius:6px; padding:6px 8px; margin:4px 0 6px; box-shadow:0 3px 10px rgba(21,101,192,0.2); display:block; height:auto; }
+          .etapas-bloco.bloqueado { background:#c62828; box-shadow:0 3px 10px rgba(198,40,40,0.25); }
+          .etapas-titulo { font-weight:bold; font-size:10px; color:#fff; margin-bottom:4px; border-bottom:1px solid rgba(255,255,255,0.2); padding-bottom:2px; }
+          .etapa-linha   { font-size:10px; color:#fff; padding:4px 0; border-bottom:1px solid rgba(255,255,255,0.15); word-wrap:break-word; overflow-wrap:break-word; line-height:1.3; }
+          .etapa-linha:last-child { border-bottom:none; }
+          .donut-row  { display:flex; align-items:center; flex-wrap:nowrap; gap:12px; margin-top:8px; background:#FAFAFA; padding:6px 8px; border-radius:6px; border:1px solid #EDEDED; }
+          .donut-wrap { position:relative; width:65px; height:65px; flex-shrink:0; }
+          .donut-wrap svg { width:65px; height:65px; display:block; }
+          .donut-label { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); text-align:center; font-size:10.5px; font-weight:bold; color:#1565C0; line-height:1.1; }
+          .donut-wrap.bloqueado .donut-label { color:#c62828; }
+          .donut-legenda      { font-size:10px; }
+          .donut-legenda-item { display:flex; align-items:center; gap:4px; margin-bottom:2px; }
+          .donut-legenda-cor  { width:10px; height:10px; border-radius:2px; display:inline-block; }
+          .cabecalho-projeto { font-weight:bold; font-size:13px; text-align:center; background:#0054A6; color:#FFF; padding:4px 9px; margin-bottom:7px; border-radius:6px; width:100%; box-sizing:border-box; }
+          .legenda-container { display:flex; flex-wrap:wrap; gap:6px; justify-content:center; margin-bottom:10px; width:100%; box-sizing:border-box; }
+          .legenda-item          { font-size:10px; font-weight:bold; color:#fff; padding:4px 7px; border-radius:4px; display:inline-flex; align-items:center; white-space:nowrap; }
+          .legenda-item.liberado { background:#28a745; }
+          .legenda-item.bloqueado{ background:#dc3545; }
+        </style>"
+
+        -- ═══════════════════════════════════════════════
+        -- CACHE DE ATIVIDADES ÚNICAS (Performance fora do Loop)
+        -- ═══════════════════════════════════════════════
+        VAR Tabela_Atividades_Unicas = 
+            SUMMARIZE(
+                ALL('icones'),
+                'icones'[atividade],
+                "@IdMin", MIN('icones'[id_atividade])
+            )
+        VAR Total_Atividades_Projeto = COUNTROWS(Tabela_Atividades_Unicas)
+        VAR Id_Minimo_Absoluto       = MINX(Tabela_Atividades_Unicas, [@IdMin])
+        VAR Primeira_Atividade_Tabela = 
+            MAXX(FILTER(Tabela_Atividades_Unicas, [@IdMin] = Id_Minimo_Absoluto), 'icones'[atividade])
+
+        -- ═══════════════════════════════════════════════
+        -- SEÇÃO 4: RENDERIZAÇÃO DA GRADE HTML MATRICIAL
+        -- ═══════════════════════════════════════════════
+        VAR HTML_Grade = 
+            IF(
+                Total_Linhas = 0,
+                "",
+                "<table>" &
+                CONCATENATEX(
+                    GENERATESERIES(1, Total_Linhas),
+                    VAR Linha_Atual = [Value]
+                    RETURN
+                        "<tr>" &
+                        CONCATENATEX(
+                            GENERATESERIES(1, Cfg_ColunasPorLinha),
+                            VAR Coluna_Atual = [Value]
+                            VAR Posicao      = Pag_IndiceInicio + (Linha_Atual - 1) * Cfg_ColunasPorLinha + Coluna_Atual - 1
+                            
+                            VAR Registro     = FILTER(Dados_Pagina, [@indice] = Posicao)
+                            
+                            RETURN
+                                IF(
+                                    ISEMPTY(Registro),
+                                    "<td></td>",
+                                    CONCATENATEX(
+                                        Registro,
+                                        VAR Campo_Torre       = 'mapa_torres'[torre]
+                                        VAR Campo_Modelo      = 'mapa_torres'[modelo]
+                                        VAR Campo_Fase        = 'mapa_torres'[descricao_fase_torre]
+                                        VAR Campo_Fundiario   = 'mapa_torres'[status_fundiario_resumo]
+                                        VAR Campo_Arqueologia = 'mapa_torres'[status_arqueologia]
+                                        VAR Status_Engenharia = 'mapa_torres'[status_engenharia]
+                                        VAR Ctx_IdProjeto     = 'mapa_torres'[id_projeto]
+
+                                        VAR Fase_Raw     = IF(ISBLANK(Campo_Fase) || Campo_Fase = "" || Campo_Fase = "NÃO INICIADO", "", Campo_Fase)
+                                        VAR Fase_Tratada = IF(Fase_Raw = "", Primeira_Atividade_Tabela, Fase_Raw)
+
+                                        VAR Atividade_Texto = 
+                                            SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(Fase_Tratada, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"), """", "&#39;")
+
+                                        VAR Tem_Bloqueio =
+                                            (Campo_Fundiario   <> "LIBERADO" && NOT ISBLANK(Campo_Fundiario))   ||
+                                            (Campo_Arqueologia <> "LIBERADO" && NOT ISBLANK(Campo_Arqueologia)) ||
+                                            (Status_Engenharia  <> "LIBERADO" && NOT ISBLANK(Status_Engenharia))
+
+                                        VAR Id_Atividade_Atual = MAXX(FILTER(Tabela_Atividades_Unicas, 'icones'[atividade] = Atividade_Texto), [@IdMin])
+
+                                        VAR Fase_Anterior = 
+                                            IF(
+                                                Id_Atividade_Atual = Id_Minimo_Absoluto || Fase_Raw = "",
+                                                "NÃO INICIADO",
+                                                COALESCE(
+                                                    MAXX(TOPN(1, FILTER(Tabela_Atividades_Unicas, [@IdMin] < Id_Atividade_Atual), [@IdMin], DESC), 'icones'[atividade]),
+                                                    "NÃO INICIADO"
+                                                )
+                                            )
+
+                                        VAR URL_Icone = LOOKUPVALUE('icones'[link_bi], 'icones'[atividade], Atividade_Texto)
+
+                                        VAR Texto_Etapa_Atual =
+                                            IF(
+                                                Tem_Bloqueio,
+                                                "&#9888; PARALISADA em: <b>" & Atividade_Texto & "</b> devido a bloqueio",
+                                                "&#8635; Em andamento: <b>" & Atividade_Texto & "</b>"
+                                            )
+
+                                        VAR Badge_Fundiario   = IF(Campo_Fundiario   = "LIBERADO", "badge-liberado", "badge-bloqueado")
+                                        VAR Badge_Arqueologia = IF(Campo_Arqueologia = "LIBERADO", "badge-liberado", "badge-bloqueado")
+                                        VAR Badge_Engenharia  = IF(Status_Engenharia  = "LIBERADO", "badge-liberado", "badge-bloqueado")
+                                        
+                                        VAR Label_Fundiario   = IF(Campo_Fundiario   = "LIBERADO", "FL", "FB")
+                                        VAR Label_Arqueologia = IF(Campo_Arqueologia = "LIBERADO", "MA", "MB")
+                                        VAR Label_Engenharia  = IF(Status_Engenharia  = "LIBERADO", "EL", "EB")
+
+                                        VAR Subatividades_Concluidas = COUNTROWS(FILTER(Tabela_Atividades_Unicas, [@IdMin] < Id_Atividade_Atual))
+                                        VAR Donut_Pct = IF(Total_Atividades_Projeto = 0 || Fase_Raw = "", 0.00, DIVIDE(Subatividades_Concluidas, Total_Atividades_Projeto, 0))
+
+                                        -- SVG Progress Donut
+                                        VAR Donut_C         = 157.08
+                                        VAR Concluido_Texto = SUBSTITUTE(FORMAT(Donut_Pct * Donut_C, "0.00"), ",", ".")
+                                        VAR Pendente_Texto  = SUBSTITUTE(FORMAT(Donut_C - (Donut_Pct * Donut_C), "0.00"), ",", ".")
+                                        
+                                        VAR SVG_Donut =
+                                            "<svg viewBox='0 0 65 65' xmlns='http://www.w3.org/2000/svg'>" &
+                                                "<circle cx='32.5' cy='32.5' r='25' fill='none' stroke='#dc3545' stroke-width='7' transform='rotate(-90 32.5 32.5)'/>" &
+                                                "<circle cx='32.5' cy='32.5' r='25' fill='none' stroke='#28a745' stroke-width='7' transform='rotate(-90 32.5 32.5)' stroke-dasharray='" & Concluido_Texto & " " & Pendente_Texto & "'/>" &
+                                            "</svg>"
+
+                                        VAR Classe_Etapas = IF(Tem_Bloqueio, "etapas-bloco bloqueado", "etapas-bloco")
+                                        VAR Classe_Donut  = IF(Tem_Bloqueio, "donut-wrap bloqueado",   "donut-wrap")
+                                        VAR Rotulo_Donut  = IF(Tem_Bloqueio, "imped.", "obra")
+                                        VAR Classe_Quadro = IF(ISBLANK(URL_Icone) || URL_Icone = "", "quadro-torre vazio", "quadro-torre")
+
+                                        -- BUSCA DO ÍCONE MAPEANDO PELA COLUNA 'Link_Dash'
+                                        VAR Nome_Travessia = 
+                                            CALCULATE(
+                                                MAX('controle_travessia'[tipo]),
+                                                FILTER(
+                                                    ALL('controle_travessia'),
+                                                    'controle_travessia'[id_projeto] = Ctx_IdProjeto && 
+                                                    'controle_travessia'[torre_inicial] = Campo_Torre
+                                                )
+                                            )
+
+                                        VAR URL_Icone_Travessia = 
+                                            IF(
+                                                ISBLANK(Nome_Travessia) || Nome_Travessia = "",
+                                                "",
+                                                CALCULATE(
+                                                    MAX('icones_travessia'[Link_Dash]),
+                                                    FILTER(
+                                                        ALL('icones_travessia'),
+                                                        'icones_travessia'[Nome] = Nome_Travessia
+                                                    )
+                                                )
+                                            )
+
+                                        VAR HTML_Travessia = 
+                                            IF(
+                                                ISBLANK(URL_Icone_Travessia) || URL_Icone_Travessia = "" || Coluna_Atual = Cfg_ColunasPorLinha, 
+                                                "", 
+                                                "<div class='vano-travessia'>" &
+                                                    "<div class='tag-travessia' title='" & Nome_Travessia & "'>" & 
+                                                        "<img src='" & URL_Icone_Travessia & "' />" & 
+                                                    "</div>" &
+                                                    "<div class='linha-conector'></div>" &
+                                                "</div>"
+                                            )
+
+                                        RETURN
+                                            "<td><div class='celula-flex'>" &
+                                                "<div class='torre-container'>" &
+                                                    "<div class='status-badges'>" &
+                                                        "<div class='badge " & Badge_Fundiario   & "'>" & Label_Fundiario   & "</div>" &
+                                                        "<div class='badge " & Badge_Arqueologia & "'>" & Label_Arqueologia & "</div>" &
+                                                        "<div class='badge " & Badge_Engenharia  & "'>" & Label_Engenharia  & "</div>" &
+                                                    "</div>" &
+                                                    "<div class='" & Classe_Quadro & "'>" &
+                                                        IF(ISBLANK(URL_Icone) || URL_Icone = "", "", "<img class='icone-torre' src='" & URL_Icone & "'/>") &
+                                                    "</div>" &
+                                                    "<span class='label-torre'>" & Campo_Torre & " - " & Campo_Modelo & "</span>" &
+                                                    "<div class='tooltip'>" &
+                                                        "<div class='tt-title'>&#128508; TORRE " & Campo_Torre & "</div>" &
+                                                        "<div class='tt-section'>&#9989; STATUS</div>" &
+                                                        "<div class='status-bloco'>" &
+                                                            "<div class='tt-row'><span>Fundiário:</span><b>"    & IF(Campo_Fundiario = "LIBERADO", "Liberado", "Bloqueado") & "</b></div>" &
+                                                            "<div class='tt-row'><span>Meio Ambiente:</span><b>" & IF(Campo_Arqueologia = "LIBERADO", "Liberado", "Bloqueado") & "</b></div>" &
+                                                            "<div class='tt-row'><span>Engenharia:</span><b>"   & IF(Status_Engenharia = "LIBERADO", "Liberado", "Bloqueado") & "</b></div>" &
+                                                        "</div>" &
+                                                        "<div class='" & Classe_Etapas & "'>" &
+                                                            "<div class='etapas-titulo'>ETAPAS</div>" &
+                                                            "<div class='etapa-linha'>&#10003; Concluída: <b>" & Fase_Anterior & "</b></div>" &
+                                                            "<div class='etapa-linha'>" & Texto_Etapa_Atual & "</div>" &
+                                                        "</div>" &
+                                                        "<div class='donut-row'>" &
+                                                            "<div class='" & Classe_Donut & "'>" &
+                                                                SVG_Donut &
+                                                                "<div class='donut-label'>" & FORMAT(Donut_Pct, "0.0%") & "<br/><span style='font-size:8px;font-weight:normal;'>" & Rotulo_Donut & "</span></div>" &
+                                                            "</div>" &
+                                                            "<div class='donut-legenda'>" &
+                                                                "<div class='donut-legenda-item'><span class='donut-legenda-cor' style='background:#28a745'></span>Concluído</div>" &
+                                                                "<div class='donut-legenda-item'><span class='donut-legenda-cor' style='background:#dc3545'></span>Pendente</div>" &
+                                                            "</div>" &
+                                                        "</div>" &
+                                                    "</div>" &
+                                                "</div>" & 
+                                                HTML_Travessia &
+                                            "</div></td>",
+                                        ""
+                                    )
+                                )
+                        ) & "</tr>",
+                    ""
+                ) & "</table>"
+            )
+
+        -- ═══════════════════════════════════════════════
+        -- SEÇÃO 5: MONTAGEM FINAL DO HTML
+        -- ═══════════════════════════════════════════════
+        VAR HTML_Projeto =
+            "<div class='projeto-bloco'>" &
+                "<div class='cabecalho-projeto'>PROJETO: " & Ctx_ProjetoSelecionado & " — Página " & Ctx_PaginaAtual & " de " & Total_Paginas & "</div>" &
+                "<div class='legenda-container'>" &
+                    "<div class='legenda-item liberado'>FL - Fundiário Liberado</div>"     &
+                    "<div class='legenda-item bloqueado'>FB - Fundiário Bloqueado</div>"   &
+                    "<div class='legenda-item liberado'>MA - Meio Ambiente Liberado</div>"  &
+                    "<div class='legenda-item bloqueado'>MB - Meio Ambiente Bloqueado</div>" &
+                    "<div class='legenda-item liberado'>EL - Engenharia Liberada</div>" &
+                    "<div class='legenda-item bloqueado'>EB - Engenharia Bloqueada</div>"  &
+                "</div>" &
+                HTML_Grade &
+            "</div>"
+
+        RETURN
+            "<html><head>" & CSS_Estilos & "</head><body>" & HTML_Projeto & "</body></html>"
+    )
